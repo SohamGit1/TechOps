@@ -50,4 +50,50 @@ const rsvpSchema = new Schema<IRsvp>(
     { timestamps: true },
 );
 
+// One RSVP per person per event. Also serves "all RSVPs for this event"
+// lookups, since eventId is the first field.
+rsvpSchema.index({ eventId: 1, email: 1 }, { unique: true });
+
+// Lets the server count an event's RSVPs by status straight from the index.
+rsvpSchema.index({ eventId: 1, status: 1 });
+
 export const EventRsvp = model<IRsvp>("RSVP", rsvpSchema);
+
+/**
+ * Records a person's RSVP and returns the status that was saved.
+ *
+ * Each write is a single upsert, so a double-click or retried request
+ * updates the same record instead of creating a second one. Declining
+ * after accepting is saved as Cancel.
+ */
+export async function saveRsvp(
+    eventId: string,
+    email: string,
+    accept: boolean,
+): Promise<RsvpStatus> {
+    eventId = eventId.toLowerCase();
+    const upsert = { upsert: true, runValidators: true };
+
+    if (accept) {
+        await EventRsvp.updateOne(
+            { eventId, email },
+            { $set: { status: RsvpStatus.ACCEPT } },
+            upsert,
+        );
+        return RsvpStatus.ACCEPT;
+    }
+
+    // Only an RSVP that is currently Accept becomes Cancel.
+    const cancelled = await EventRsvp.updateOne(
+        { eventId, email, status: RsvpStatus.ACCEPT },
+        { $set: { status: RsvpStatus.CANCEL } },
+    );
+    if (cancelled.modifiedCount > 0) return RsvpStatus.CANCEL;
+
+    await EventRsvp.updateOne(
+        { eventId, email },
+        { $set: { status: RsvpStatus.DECLINE } },
+        upsert,
+    );
+    return RsvpStatus.DECLINE;
+}

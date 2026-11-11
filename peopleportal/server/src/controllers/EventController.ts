@@ -44,7 +44,7 @@ import { ENABLED_SHARED_RESOURCES, hasAdminAuthority } from "../config";
 import * as express from "express";
 import { CustomValidationError, ResourceAccessError } from "../utils/errors";
 import { Event, IEvent } from "../models/Event";
-import { EventRsvp, IRsvp, RsvpStatus } from "../models/EventRsvp";
+import { EventRsvp, IRsvp, saveRsvp } from "../models/EventRsvp";
 import { FlattenMaps, HydratedDocument, Types } from "mongoose";
 import { agendaClient } from "../clients/AgendaClient";
 import { DiscordClient } from "../clients/DiscordClient";
@@ -1166,29 +1166,8 @@ export class EventController extends Controller {
             }
         }
 
-        // Check if RSVP already exists.
-        let rsvp: HydratedDocument<IRsvp> | null;
-        rsvp = await EventRsvp.findOne({
-            eventId: eventId,
-            email: email,
-        });
-
-        let status = body.accept ? RsvpStatus.ACCEPT : RsvpStatus.DECLINE;
-        if (rsvp && rsvp.status == RsvpStatus.ACCEPT && !body.accept) {
-            status = RsvpStatus.CANCEL;
-        }
-
-        // Update existing rsvp or create new one.
-        if (rsvp) {
-            rsvp.status = status;
-            await rsvp.save();
-        } else {
-            await EventRsvp.create({
-                eventId: eventId,
-                status: status,
-                email: email,
-            });
-        }
+        // Create or update in one step so repeated clicks can't duplicate it.
+        const status = await saveRsvp(eventId, email, body.accept);
 
         const issues: string[] = [];
         // Get Google Calendar Link
