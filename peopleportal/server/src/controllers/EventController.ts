@@ -31,6 +31,12 @@ import {
     Delete,
     Patch,
 } from "tsoa";
+import { createHash, timingSafeEqual } from "node:crypto";
+import {
+    EventCheckIn,
+    EventCheckInAttempt,
+} from "../models/EventCheckIn";
+import { EventAttendance } from "../models/EventAttendance";
 import { EmailClient } from "../clients/EmailClient";
 import { SlackClient } from "../clients/SlackClient";
 import { AuthentikClient } from "../clients/AuthentikClient";
@@ -45,6 +51,29 @@ import { DiscordClient } from "../clients/DiscordClient";
 
 import type { DocumentJSON } from "../utils/types";
 
+export interface EventCheckInCredentialsResponse {
+    token: string;
+    code: string;
+    closed: boolean;
+}
+
+export interface SubmitEventCheckInRequest {
+    code?: string;
+    token?: string;
+}
+
+export interface SubmitEventCheckInResponse {
+    checkedInAt: string;
+}
+
+export interface SetEventCheckInClosedRequest {
+    closed: boolean;
+}
+
+export interface SetEventCheckInClosedResponse {
+    closed: boolean;
+}
+
 export interface GetEventListOptions {
     before?: Date;
     after?: Date;
@@ -55,9 +84,17 @@ export interface GetEventListResponse {
     count: number;
 }
 
+export interface EventCheckInState {
+    canManage: boolean;
+    canCheckIn: boolean;
+    checkedInAt: string | null;
+}
+
 export interface GetEventResponse {
     status: string;
-    data: DocumentJSON<IEvent>;
+    data: DocumentJSON<IEvent> & {
+        checkIn: EventCheckInState;
+    };
 }
 
 export interface CreateEventRequest {
@@ -225,51 +262,105 @@ export class EventController extends Controller {
         @Request() req: express.Request,
         @Path() eventId: string,
     ): Promise<GetEventResponse> {
-        // Get event data
-        let query = Event.findOne({ _id: eventId });
+        if (!Types.ObjectId.isValid(eventId)) {
+            throw new CustomValidationError(400, "Invalid event ID.");
+        }
 
-        // Checks if user is not an authorized user (is using otp)
-        if (!req.session.authorizedUser || !req.session.authorizedUser.pk) {
-            // Only show public events
-            query = query.where("scope").equals("public");
-        } else if (!req.session.authorizedUser?.is_superuser) {
-            try {
-                const userTeams =
-                    await this.authentikClient.getRootTeamsForUsername(
-                        req.session.authorizedUser!.username,
-                    );
-                if (
-                    !hasAdminAuthority(
+        const user = req.session.authorizedUser;
+        const isPortalUser = user?.pk !== undefined && user.pk !== null;
+
+        let isAdmin = false;
+
+        if (isPortalUser && user) {
+            isAdmin = user.is_superuser === true;
+
+            if (!isAdmin) {
+                try {
+                    const userTeams =
+                        await this.authentikClient.getRootTeamsForUsername(
+                            user.username,
+                        );
+
+                    isAdmin = hasAdminAuthority(
                         userTeams.teams,
-                        req.session.authorizedUser!.groups ?? [],
-                    )
-                ) {
-                    query = query.where("scope").ne("exec");
+                        user.groups ?? [],
+                    );
+                } catch (error) {
+                    console.error("Failed to resolve event permissions:", error);
+
+                    throw new ResourceAccessError(
+                        500,
+                        "Failed to get team membership.",
+                    );
                 }
-            } catch (error) {
-                throw new ResourceAccessError(
-                    500,
-                    "Failed to get team membership.",
-                );
             }
         }
 
-        try {
-            const event = await query.lean().exec();
-            if (!event) {
-                throw new CustomValidationError(
-                    404,
-                    `No event with id ${eventId}`,
-                );
-            }
-            return { status: "Success", data: event };
-        } catch (error) {
-            console.error(
-                `Failed to get event data for event ${eventId}:`,
-                error,
-            );
-            throw new ResourceAccessError(500, "Failed to fetch event data");
+        const event = await Event.findById(eventId).lean().exec();
+
+        if (!event) {
+            throw new CustomValidationError(404, "Event not found.");
         }
+
+        // Preserve the current event visibility rules:
+        // OTP users: public only.
+        // Portal users: public/internal.
+        // Admins: all scopes.
+        const canView = isPortalUser
+            ? isAdmin || event.scope === "public" || event.scope === "internal"
+            : event.scope === "public";
+
+        if (!canView) {
+            throw new CustomValidationError(404, "Event not found.");
+        }
+
+        const canManage =
+            isPortalUser &&
+            (isAdmin || event.creator === user!.pk);
+
+        const attendance = isPortalUser
+            ? await EventAttendance.findOne({
+                eventId: event._id.toString(),
+                userPk: user!.pk,
+            })
+                .lean()
+                .exec()
+            : null;
+
+        const now = Date.now();
+
+        // Initialize settings for older events when their creator/admin views them.
+        const checkInSettings = canManage
+            ? await this.ensureCheckInSettings(event._id.toString())
+            : await EventCheckIn.findOne({
+                eventId: event._id.toString(),
+            })
+                .select("closed")
+                .lean()
+                .exec();
+
+        const withinCheckInWindow =
+            checkInSettings !== null &&
+            !checkInSettings.closed &&
+            now >= new Date(event.startTime).getTime() &&
+            now < new Date(event.endTime).getTime();
+
+        return {
+            status: "Success",
+            data: {
+                ...event,
+                checkIn: {
+                    canManage,
+                    canCheckIn:
+                        isPortalUser &&
+                        withinCheckInWindow &&
+                        attendance === null,
+                    checkedInAt: attendance
+                        ? attendance.checkedInAt.toISOString()
+                        : null,
+                },
+            },
+        };
     }
 
     /**
@@ -309,6 +400,7 @@ export class EventController extends Controller {
             scope: body.scope,
             marketingChannels: body.marketingChannels,
         });
+        await this.ensureCheckInSettings(event._id.toString());
 
         const gCalendarLink = EventController.generateCalendarLink(event);
         const inviteLink = EventController.generateEventInviteLink(event);
@@ -409,6 +501,214 @@ export class EventController extends Controller {
             status: "Event Created Successfully",
             issues: issues,
         };
+    }
+
+    @Get("{eventId}/check-in/credentials")
+    @Security("oidc")
+    @Tags("Event Check-in")
+    async getCheckInCredentials(
+        @Request() req: express.Request,
+        @Path() eventId: string,
+    ): Promise<EventCheckInCredentialsResponse> {
+        const { data: event } = await this.getEvent(req, eventId);
+
+        if (!event.checkIn.canManage) {
+            throw new ResourceAccessError(
+                403,
+                "Only the event creator or an admin can access check-in codes.",
+            );
+        }
+
+        const settings = await this.ensureCheckInSettings(
+            event._id.toString(),
+        );
+
+        this.setHeader("Cache-Control", "no-store");
+
+        return {
+            token: settings.token,
+            code: settings.code,
+            closed: settings.closed,
+        };
+    }
+
+    @Post("{eventId}/check-in")
+    @Security("oidc")
+    @SuccessResponse(200)
+    @Tags("Event Check-in")
+    async submitEventCheckIn(
+        @Request() req: express.Request,
+        @Path() eventId: string,
+        @Body() body: SubmitEventCheckInRequest,
+    ): Promise<SubmitEventCheckInResponse> {
+        const user = req.session.authorizedUser;
+
+        if (!user || user.pk === undefined || user.pk === null) {
+            throw new ResourceAccessError(
+                401,
+                "Sign in with your portal account to check in.",
+            );
+        }
+
+        // Validates the ID and enforces existing event visibility rules.
+        const { data: event } = await this.getEvent(req, eventId);
+        const canonicalEventId = event._id.toString();
+
+        const attendanceFilter = {
+            eventId: canonicalEventId,
+            userPk: user.pk,
+        };
+
+        const existing = await EventAttendance.findOne(
+            attendanceFilter,
+        ).exec();
+
+        // Repeat submissions return the original confirmation, even after closing.
+        if (existing) {
+            return {
+                checkedInAt: existing.checkedInAt.toISOString(),
+            };
+        }
+
+        await this.limitCheckInAttempts(user.pk);
+
+        const hasCode = typeof body.code === "string";
+        const hasToken = typeof body.token === "string";
+
+        if (hasCode === hasToken) {
+            throw new CustomValidationError(
+                400,
+                "Provide either an event code or a QR token.",
+            );
+        }
+
+        const settings = await EventCheckIn.findOne({
+            eventId: canonicalEventId,
+        }).exec();
+
+        if (!settings) {
+            throw new ResourceAccessError(
+                409,
+                "The organizer has not prepared check-in for this event.",
+            );
+        }
+
+        if (settings.closed) {
+            throw new ResourceAccessError(
+                409,
+                "Check-in for this event has closed.",
+            );
+        }
+
+        const now = Date.now();
+
+        if (now < new Date(event.startTime).getTime()) {
+            throw new ResourceAccessError(
+                409,
+                "Check-in has not opened yet.",
+            );
+        }
+
+        if (now >= new Date(event.endTime).getTime()) {
+            throw new ResourceAccessError(
+                409,
+                "Check-in for this event has closed.",
+            );
+        }
+
+        const supplied = hasCode
+            ? body.code!.trim()
+            : body.token!.trim();
+
+        const validFormat = hasCode
+            ? /^\d{6}$/.test(supplied)
+            : /^[a-f0-9]{64}$/.test(supplied);
+
+        const expected = hasCode ? settings.code : settings.token;
+
+        // Hash both values to fixed-size buffers before constant-time comparison.
+        const matches =
+            validFormat &&
+            timingSafeEqual(
+                createHash("sha256").update(supplied).digest(),
+                createHash("sha256").update(expected).digest(),
+            );
+
+        if (!matches) {
+            throw new CustomValidationError(
+                400,
+                "Invalid event code or QR link.",
+            );
+        }
+
+        try {
+            const attendance = await EventAttendance.findOneAndUpdate(
+                attendanceFilter,
+                {
+                    $setOnInsert: {
+                        ...attendanceFilter,
+                        checkedInAt: new Date(),
+                        method: hasCode ? "code" : "qr",
+                    },
+                },
+                {
+                    upsert: true,
+                    new: true,
+                    runValidators: true,
+                },
+            ).exec();
+
+            if (!attendance) {
+                throw new ResourceAccessError(
+                    500,
+                    "Unable to record attendance.",
+                );
+            }
+
+            return {
+                checkedInAt: attendance.checkedInAt.toISOString(),
+            };
+        } catch (error) {
+            // The unique index handles simultaneous submissions from two devices.
+            if (!this.isDuplicateKey(error)) throw error;
+
+            const attendance = await EventAttendance.findOne(
+                attendanceFilter,
+            ).exec();
+
+            if (!attendance) throw error;
+
+            return {
+                checkedInAt: attendance.checkedInAt.toISOString(),
+            };
+        }
+    }
+
+    @Patch("{eventId}/check-in")
+    @Security("oidc")
+    @Tags("Event Check-in")
+    async setCheckInClosed(
+        @Request() req: express.Request,
+        @Path() eventId: string,
+        @Body() body: SetEventCheckInClosedRequest,
+    ): Promise<SetEventCheckInClosedResponse> {
+        const { data: event } = await this.getEvent(req, eventId);
+
+        if (!event.checkIn.canManage) {
+            throw new ResourceAccessError(
+                403,
+                "Only the event creator or an admin can manage check-in.",
+            );
+        }
+
+        const settings = await this.ensureCheckInSettings(
+            event._id.toString(),
+        );
+
+        settings.closed = body.closed;
+        await settings.save();
+
+        return { closed: settings.closed };
     }
 
     /**
@@ -972,7 +1272,89 @@ export class EventController extends Controller {
             rsvp: rsvp,
         };
     }
+    private isDuplicateKey(error: unknown): boolean {
+        return (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === 11000
+        );
+    }
 
+    private async ensureCheckInSettings(eventId: string) {
+        try {
+            const settings = await EventCheckIn.findOneAndUpdate(
+                { eventId },
+                { $setOnInsert: { eventId } },
+                {
+                    upsert: true,
+                    new: true,
+                    setDefaultsOnInsert: true,
+                },
+            ).exec();
+
+            if (!settings) {
+                throw new ResourceAccessError(
+                    500,
+                    "Unable to prepare event check-in.",
+                );
+            }
+
+            return settings;
+        } catch (error) {
+            // Another request may have created the same settings concurrently.
+            if (!this.isDuplicateKey(error)) throw error;
+
+            const settings = await EventCheckIn.findOne({ eventId }).exec();
+            if (!settings) throw error;
+
+            return settings;
+        }
+    }
+
+    private async limitCheckInAttempts(userPk: number): Promise<void> {
+        const windowMs = 5 * 60 * 1000;
+        const bucket = Math.floor(Date.now() / windowMs);
+
+        // Limit across all events for this account.
+        const id = `${userPk}:${bucket}`;
+        const expiresAt = new Date((bucket + 2) * windowMs);
+
+        let attempt;
+
+        try {
+            attempt = await EventCheckInAttempt.findOneAndUpdate(
+                { _id: id },
+                {
+                    $inc: { count: 1 },
+                    $setOnInsert: { expiresAt },
+                },
+                { upsert: true, new: true },
+            ).exec();
+        } catch (error) {
+            if (!this.isDuplicateKey(error)) throw error;
+
+            attempt = await EventCheckInAttempt.findByIdAndUpdate(
+                id,
+                { $inc: { count: 1 } },
+                { new: true },
+            ).exec();
+        }
+
+        if (!attempt) {
+            throw new ResourceAccessError(
+                503,
+                "Check-in is temporarily unavailable.",
+            );
+        }
+
+        if (attempt.count > 10) {
+            throw new ResourceAccessError(
+                429,
+                "Too many check-in attempts. Please try again in five minutes.",
+            );
+        }
+    }
     private async sendSlackMessage(message: string): Promise<boolean> {
         const slackChannel = await this.slackClient.getChannelFromName(
             EventController.SLACK_EVENT_ANNOUNCEMENT_CHANNEL,

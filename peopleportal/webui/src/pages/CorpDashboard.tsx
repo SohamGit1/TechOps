@@ -33,6 +33,7 @@ import { MeetingDetail } from "./MeetingDetail";
 import { MeetingCheckin } from "./MeetingCheckin";
 import { Events } from "../components/fabric/Events";
 import { EventAttendance } from "../components/fabric/EventAttendance";
+import { EventCheckInDisplay } from "./EventCheckInDisplay";
 import {
     Breadcrumb,
     BreadcrumbItem,
@@ -252,6 +253,10 @@ export const CorpDashboard = () => {
                         <Route
                             path="/org/teams/:teamId/meetings"
                             element={<TeamMeetings />}
+                        />
+                        <Route
+                            path="/community/events/:eventId/check-in/display"
+                            element={<EventCheckInDisplay />}
                         />
                         <Route
                             path="/org/teams/:teamId/meetings/:meetingId"

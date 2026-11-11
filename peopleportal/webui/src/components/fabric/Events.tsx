@@ -15,7 +15,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
-
+import { EventCheckInDialog } from "@/components/fragments/EventCheckInDialog";
 import { PEOPLEPORTAL_SERVER_ENDPOINT } from "@/commons/config";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,12 +51,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
     CalendarX2Icon,
+    CheckIcon,
     ClipboardListIcon,
     ClockIcon,
     Loader2,
+    LogInIcon,
     MapPinIcon,
     PencilIcon,
     PlusIcon,
+    QrCodeIcon,
 } from "lucide-react";
 import {
     useCallback,
@@ -80,6 +83,11 @@ interface EventDoc {
     location: string;
     scope: Visibility;
     marketingChannels: MarketingChannels[];
+    checkIn?: {
+        canManage: boolean;
+        canCheckIn: boolean;
+        checkedInAt: string | null;
+    };
 }
 
 interface EventForm {
@@ -156,6 +164,14 @@ const EventCard = ({
     onEdit?: (e: EventDoc) => void;
 }) => {
     const navigate = useNavigate();
+    const [checkInOpen, setCheckInOpen] = useState(false);
+    const [localCheckedInAt, setLocalCheckedInAt] = useState<string | null>(null);
+
+    const checkedInAt =
+        event.checkIn?.checkedInAt ?? localCheckedInAt;
+
+    const canManageCheckIn = event.checkIn?.canManage === true;
+    const canCheckIn = event.checkIn?.canCheckIn === true;
     return (
         <Card className="gap-0 [&>*:first-child]:pt-4 [&>*:last-child]:pb-3">
             <CardHeader className="pt-1 pb-0">
@@ -189,35 +205,72 @@ const EventCard = ({
                     {event.eventDescription}
                 </p>
             </CardContent>
-            <CardFooter className="justify-end gap-2">
-                <div className="flex items-center gap-1.5 text-sm text-muted-foreground mr-auto">
+            <CardFooter className="flex-wrap justify-end gap-2">
+                <div className="mr-auto flex items-center gap-1.5 text-sm text-muted-foreground">
                     <MapPinIcon className="size-3.5" />
                     {event.location}
                 </div>
-                {onEdit !== undefined && (
-                    <>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => onEdit(event)}
-                        >
-                            <PencilIcon />
-                            Edit
-                        </Button>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                    {onEdit !== undefined && (
+                        <>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onEdit(event)}
+                            >
+                                <PencilIcon />
+                                Edit
+                            </Button>
+
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                    navigate(
+                                        `/community/events/${event._id}/attendance`,
+                                    )
+                                }
+                            >
+                                <ClipboardListIcon />
+                                Attendance
+                            </Button>
+                        </>
+                    )}
+
+                    {canManageCheckIn && (
                         <Button
                             variant="outline"
                             size="sm"
                             onClick={() =>
                                 navigate(
-                                    `/community/events/${event._id}/attendance`,
+                                    `/community/events/${event._id}/check-in/display`,
                                 )
                             }
                         >
-                            <ClipboardListIcon />
-                            Attendance
+                            <QrCodeIcon />
+                            QR code
                         </Button>
-                    </>
-                )}
+                    )}
+
+                    {checkedInAt ? (
+                        <Button variant="outline" size="sm" disabled>
+                            <CheckIcon />
+                            Checked in
+                        </Button>
+                    ) : canCheckIn ? (
+                        <Button size="sm" onClick={() => setCheckInOpen(true)}>
+                            <LogInIcon />
+                            Check in
+                        </Button>
+                    ) : null}
+                </div>
+                <EventCheckInDialog
+                    eventId={event._id}
+                    eventName={event.eventName}
+                    open={checkInOpen}
+                    onOpenChange={setCheckInOpen}
+                    onCheckedIn={setLocalCheckedInAt}
+                />
             </CardFooter>
         </Card>
     );
