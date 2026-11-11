@@ -36,7 +36,7 @@ import {
     EventCheckIn,
     EventCheckInAttempt,
 } from "../models/EventCheckIn";
-import { EventAttendance } from "../models/EventAttendance";
+import { EventAttendance, IEventAttendance } from "../models/EventAttendance";
 import { EmailClient } from "../clients/EmailClient";
 import { SlackClient } from "../clients/SlackClient";
 import { AuthentikClient } from "../clients/AuthentikClient";
@@ -44,7 +44,7 @@ import { ENABLED_SHARED_RESOURCES, hasAdminAuthority } from "../config";
 import * as express from "express";
 import { CustomValidationError, ResourceAccessError } from "../utils/errors";
 import { Event, IEvent } from "../models/Event";
-import { EventRsvp, IRsvp, saveRsvp } from "../models/EventRsvp";
+import { EventRsvp, IRsvp, RsvpStatus, saveRsvp } from "../models/EventRsvp";
 import { FlattenMaps, HydratedDocument, Types } from "mongoose";
 import { agendaClient } from "../clients/AgendaClient";
 import { DiscordClient } from "../clients/DiscordClient";
@@ -131,13 +131,30 @@ export interface GetRsvpsRequest {
     page: number;
     pageSize?: number;
 }
+
+export interface GetAttendeesResponse {
+    status: string;
+    data: {
+        email: string;
+        checkedInAt: string;
+        rsvp: "Accept" | "Walk-in" | "Manual";
+    }[];
+    pagination: { totalPages: number };
+    counts: { total: number };
+}
+
 export interface GetRsvpResponse {
     status: string;
     data: DocumentJSON<IRsvp>[];
     pagination: {
         totalPages: number;
     };
+    counts: {
+        accepted: number;
+        total: number;
+    };
 }
+
 
 export interface RsvpRequest {
     accept: boolean;
@@ -504,6 +521,7 @@ export class EventController extends Controller {
     }
 
     @Get("{eventId}/check-in/credentials")
+    @SuccessResponse(200)
     @Security("oidc")
     @Tags("Event Check-in")
     async getCheckInCredentials(
@@ -647,6 +665,7 @@ export class EventController extends Controller {
                 {
                     $setOnInsert: {
                         ...attendanceFilter,
+                        email: user.email,
                         checkedInAt: new Date(),
                         method: hasCode ? "code" : "qr",
                     },
@@ -685,6 +704,7 @@ export class EventController extends Controller {
     }
 
     @Patch("{eventId}/check-in")
+    @SuccessResponse(200)
     @Security("oidc")
     @Tags("Event Check-in")
     async setCheckInClosed(
@@ -1071,22 +1091,82 @@ export class EventController extends Controller {
                 .limit(pageSize)
                 .lean();
 
-            const [results, totalDocs] = await Promise.all([
+            const [results, totalDocs, acceptedCount] = await Promise.all([
                 query.exec(),
                 EventRsvp.countDocuments({ eventId: eventId }).lean(),
+                EventRsvp.countDocuments({ eventId: eventId, status: RsvpStatus.ACCEPT }),
             ]);
+
             return {
                 status: "success",
                 data: results,
                 pagination: {
                     totalPages: Math.ceil(totalDocs / pageSize),
                 },
+                counts: {
+                    accepted: acceptedCount,
+                    total: totalDocs,
+                },
             };
+
         } catch (error) {
             console.error(`Failed to get RSVPs for event ${eventId}:`, error);
             throw new ResourceAccessError(500, "Failed to fetch RSVPs");
         }
     }
+
+        /**
+     * Returns who has checked in to an event, newest first,
+     * and whether each person RSVP'd or walked in.
+     */
+    @Get("{eventId}/attendees")
+    @SuccessResponse(200)
+    @Security("events")
+    @Tags("Event Check-in")
+    async getAttendees(
+        @Path() eventId: string,
+        @Queries() queries: GetRsvpsRequest,
+    ): Promise<GetAttendeesResponse> {
+        if (queries.page < 1) {
+            throw new CustomValidationError(400, "page must be positive.");
+        }
+        if (queries.pageSize !== undefined && queries.pageSize < 1) {
+            throw new CustomValidationError(400, "pageSize must be positive.");
+        }
+
+        const pageSize = queries.pageSize ?? 25;
+        const skip = (queries.page - 1) * pageSize;
+
+        const [attendees, total] = await Promise.all([
+            EventAttendance.find({ eventId })
+                .sort({ checkedInAt: -1 })
+                .skip(skip)
+                .limit(pageSize)
+                .lean(),
+            EventAttendance.countDocuments({ eventId }),
+        ]);
+
+        // Find which of these people RSVP'd "Accept"
+        const accepted = await EventRsvp.find({
+            eventId,
+            email: { $in: attendees.map((a) => a.email) },
+            status: RsvpStatus.ACCEPT,
+        }).lean();
+        const acceptedEmails = new Set(accepted.map((r) => r.email));
+
+        return {
+            status: "success",
+            data: attendees.map((a) => ({
+                email: a.email,
+                checkedInAt: a.checkedInAt.toISOString(),
+                method: a.method,
+                rsvp: acceptedEmails.has(a.email) ? "Accept" : "Walk-in",
+            })),
+            pagination: { totalPages: Math.ceil(total / pageSize) },
+            counts: { total },
+        };
+    }
+
 
     /**
      *

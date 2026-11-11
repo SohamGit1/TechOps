@@ -3,6 +3,8 @@ import { Schema, model } from "mongoose";
 export interface IEventAttendance {
     eventId: string;
     userPk: number;
+    // Saved at check-in so attendees can be matched to their RSVP by email.
+    email: string;
     checkedInAt: Date;
     method: "qr" | "code" | "manual";
 }
@@ -15,6 +17,10 @@ const eventAttendanceSchema = new Schema<IEventAttendance>(
         },
         userPk: {
             type: Number,
+            required: true,
+        },
+        email: {
+            type: String,
             required: true,
         },
         checkedInAt: {

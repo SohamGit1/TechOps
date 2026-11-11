@@ -18,6 +18,7 @@
 
 import { PEOPLEPORTAL_SERVER_ENDPOINT } from "@/commons/config";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
     Card,
@@ -142,6 +143,17 @@ interface RsvpDoc {
     createdAt?: string;
     updatedAt?: string;
 }
+
+interface AttendeeDoc {
+    email: string;
+    checkedInAt: string;
+    rsvp: "Accept" | "Walk-in";
+}
+
+type AttendanceTab = "rsvps" | "attendees";
+
+const POLL_INTERVAL_MS = 10_000;
+const NO_RSVP_COUNTS = { accepted: 0, total: 0 };
 
 const formatRange = (startISO: string, endISO: string) => {
     const start = new Date(startISO);
@@ -436,6 +448,13 @@ export const EventAttendance = () => {
     const [showRsvps, setShowRsvps] = useState(false);
     const [rsvpsLoading, setRsvpsLoading] = useState(false);
 
+    const [tab, setTab] = useState<AttendanceTab>("rsvps");
+    const [attendees, setAttendees] = useState<AttendeeDoc[]>([]);
+    const [rsvpCounts, setRsvpCounts] = useState(NO_RSVP_COUNTS);
+    const [attendeeCount, setAttendeeCount] = useState(0);
+    // Each refresh takes a number; only the newest one may update the page.
+    const refreshRequestId = React.useRef(0);
+
     const [accept, setAccept] = useState<boolean>(true);
     const [updating, setUpdating] = useState(false);
 
@@ -490,6 +509,8 @@ export const EventAttendance = () => {
         );
         if (rsvpRes.ok) {
             setRsvp((await rsvpRes.json()).rsvp);
+            // Update the RSVP list and counts to include this response.
+            if (showRsvps) refresh();
         } else {
             toast.error(`Failed to refresh RSVP: ${rsvpRes.statusText}`);
             return;
@@ -557,6 +578,7 @@ export const EventAttendance = () => {
                 setShowRsvps(true);
                 const rsvpJson = await allRsvpRes.json();
                 setRsvps(rsvpJson.data ?? []);
+                setRsvpCounts(rsvpJson.counts ?? NO_RSVP_COUNTS);
                 setTotalPages(rsvpJson.pagination.totalPages);
                 setPage(1);
             } else {
@@ -575,36 +597,90 @@ export const EventAttendance = () => {
         load();
     }, [load]);
 
-    const refreshList = () => {
-        setRsvpsLoading(true);
-        const queryString = new URLSearchParams({
-            page: debouncedPage.toString(),
-            pageSize: "25",
-        });
-        fetch(
-            `${PEOPLEPORTAL_SERVER_ENDPOINT}/api/events/${eventId}/rsvps?${queryString}`,
-            { credentials: "include" },
-        )
-            .then(async (res) => {
-                const rsvpJson = await res.json();
-                if (!res.ok) {
+    /**
+     * Reloads both lists so both tab counts stay current. The open tab gets
+     * the page being viewed; the other tab only needs its count.
+     * A quiet refresh (background polling) skips the dimmed table and error
+     * popups so the page doesn't flash or stack toasts every few seconds.
+     */
+    const refresh = useCallback(
+        async (quiet = false) => {
+            if (!eventId) return;
+            const requestId = ++refreshRequestId.current;
+            if (!quiet) setRsvpsLoading(true);
+
+            const listUrl = (list: AttendanceTab) => {
+                const query = new URLSearchParams({
+                    page: String(tab === list ? debouncedPage : 1),
+                    pageSize: "25",
+                });
+                return `${PEOPLEPORTAL_SERVER_ENDPOINT}/api/events/${eventId}/${list}?${query}`;
+            };
+
+            try {
+                const [rsvpRes, attendeeRes] = await Promise.all([
+                    fetch(listUrl("rsvps"), { credentials: "include" }),
+                    fetch(listUrl("attendees"), { credentials: "include" }),
+                ]);
+                const [rsvpJson, attendeeJson] = await Promise.all([
+                    rsvpRes.json(),
+                    attendeeRes.json(),
+                ]);
+                if (!rsvpRes.ok || !attendeeRes.ok) {
                     throw new Error(
-                        rsvpJson.message || "Failed to fetch RSVP data",
+                        (!rsvpRes.ok ? rsvpJson : attendeeJson).message ||
+                            "Failed to fetch attendance data",
                     );
                 }
+
+                // A newer refresh started while this one was loading.
+                if (requestId !== refreshRequestId.current) return;
+
                 setRsvps(rsvpJson.data ?? []);
-                setTotalPages(rsvpJson.pagination.totalPages);
-            })
-            .catch((e) => {
-                toast.error(`Failed to fetch RSVPs: ${e.message}`);
-            })
-            .finally(() => {
-                setRsvpsLoading(false);
-            });
-    };
+                setAttendees(attendeeJson.data ?? []);
+                setRsvpCounts(rsvpJson.counts ?? NO_RSVP_COUNTS);
+                setAttendeeCount(attendeeJson.counts?.total ?? 0);
+                setTotalPages(
+                    (tab === "rsvps" ? rsvpJson : attendeeJson).pagination
+                        ?.totalPages ?? 0,
+                );
+            } catch (e: any) {
+                if (!quiet && requestId === refreshRequestId.current) {
+                    toast.error(`Failed to refresh attendance: ${e.message}`);
+                }
+            } finally {
+                if (!quiet && requestId === refreshRequestId.current) {
+                    setRsvpsLoading(false);
+                }
+            }
+        },
+        [eventId, tab, debouncedPage],
+    );
+
+    // Reload when the page or tab changes.
     React.useEffect(() => {
-        refreshList();
-    }, [debouncedPage]);
+        if (showRsvps) refresh();
+    }, [refresh, showRsvps]);
+
+    // Pick up other people's RSVPs and check-ins while the page is open.
+    React.useEffect(() => {
+        if (!showRsvps) return;
+        const refreshIfVisible = () => {
+            if (document.visibilityState === "visible") refresh(true);
+        };
+        const timer = setInterval(refreshIfVisible, POLL_INTERVAL_MS);
+        document.addEventListener("visibilitychange", refreshIfVisible);
+        return () => {
+            clearInterval(timer);
+            document.removeEventListener("visibilitychange", refreshIfVisible);
+        };
+    }, [refresh, showRsvps]);
+
+    const switchTab = (next: string) => {
+        setTab(next as AttendanceTab);
+        setPage(1);
+        setDebouncedPage(1);
+    };
 
     return (
         <div className="flex min-h-full flex-col gap-6">
@@ -835,12 +911,37 @@ export const EventAttendance = () => {
 
                 {!loading && showRsvps && (
                     <>
-                        <div className="flex items-center justify-between mt-3">
-                            <h2 className="text-xl font-semibold mt-3">
-                                All RSVPs
-                            </h2>
+                        <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+                            <Tabs value={tab} onValueChange={switchTab}>
+                                <TabsList>
+                                    <TabsTrigger value="rsvps" className="group">
+                                        <span className="hidden size-2 rounded-full bg-green-500 group-data-[state=active]:inline-block" />
+                                        All RSVPs
+                                        <Badge
+                                            variant="secondary"
+                                            aria-label={`${rsvpCounts.accepted} going out of ${rsvpCounts.total} responses`}
+                                        >
+                                            {rsvpCounts.accepted} /{" "}
+                                            {rsvpCounts.total}
+                                        </Badge>
+                                    </TabsTrigger>
+                                    <TabsTrigger
+                                        value="attendees"
+                                        className="group"
+                                    >
+                                        <span className="hidden size-2 rounded-full bg-green-500 group-data-[state=active]:inline-block" />
+                                        Active attendees
+                                        <Badge
+                                            variant="secondary"
+                                            aria-label={`${attendeeCount} checked in`}
+                                        >
+                                            {attendeeCount}
+                                        </Badge>
+                                    </TabsTrigger>
+                                </TabsList>
+                            </Tabs>
 
-                            {rsvps.length > 0 && (
+                            {totalPages > 1 && (
                                 <PaginationContent>
                                     <PaginationItem>
                                         <PaginationPrevious
@@ -889,7 +990,55 @@ export const EventAttendance = () => {
                                 </PaginationContent>
                             )}
                         </div>
-                        {rsvps.length === 0 ? (
+                        {tab === "attendees" ? (
+                            attendees.length === 0 ? (
+                                <div className="rounded-lg border border-dashed py-12 text-center text-muted-foreground">
+                                    No one has checked in yet.
+                                </div>
+                            ) : (
+                                <div className="rounded-lg border mb-10">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow className="relative">
+                                                <TableHead>Email</TableHead>
+                                                <TableHead>RSVP</TableHead>
+                                                <TableHead>Checked in</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody
+                                            className={`${rsvpsLoading ? "opacity-50" : ""}`}
+                                        >
+                                            {attendees.map((a) => (
+                                                <TableRow
+                                                    key={`${a.email}-${a.checkedInAt}`}
+                                                >
+                                                    <TableCell className="font-medium">
+                                                        {a.email}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge
+                                                            variant={
+                                                                a.rsvp ===
+                                                                "Accept"
+                                                                    ? "default"
+                                                                    : "outline"
+                                                            }
+                                                        >
+                                                            {a.rsvp}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="text-muted-foreground">
+                                                        {new Date(
+                                                            a.checkedInAt,
+                                                        ).toLocaleString()}
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                            )
+                        ) : rsvps.length === 0 ? (
                             <div className="rounded-lg border border-dashed py-12 text-center text-muted-foreground">
                                 No RSVPs yet.
                             </div>

@@ -868,11 +868,21 @@ const models: TsoaRoute.Models = {
         "type": {"dataType":"intersection","subSchemas":[{"ref":"mongoose.FlattenMaps_IEvent_"},{"ref":"Required___id-mongoose.Types.ObjectId__"},{"dataType":"nestedObjectLiteral","nestedProperties":{"__v":{"dataType":"double","required":true}}}],"validators":{}},
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    "EventCheckInState": {
+        "dataType": "refObject",
+        "properties": {
+            "canManage": {"dataType":"boolean","required":true},
+            "canCheckIn": {"dataType":"boolean","required":true},
+            "checkedInAt": {"dataType":"union","subSchemas":[{"dataType":"string"},{"dataType":"enum","enums":[null]}],"required":true},
+        },
+        "additionalProperties": false,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     "GetEventResponse": {
         "dataType": "refObject",
         "properties": {
             "status": {"dataType":"string","required":true},
-            "data": {"ref":"DocumentJSON_IEvent_","required":true},
+            "data": {"dataType":"intersection","subSchemas":[{"ref":"DocumentJSON_IEvent_"},{"dataType":"nestedObjectLiteral","nestedProperties":{"checkIn":{"ref":"EventCheckInState","required":true}}}],"required":true},
         },
         "additionalProperties": false,
     },
@@ -897,6 +907,49 @@ const models: TsoaRoute.Models = {
             "location": {"dataType":"string","required":true},
             "scope": {"dataType":"string","required":true},
             "marketingChannels": {"dataType":"array","array":{"dataType":"string"},"required":true},
+        },
+        "additionalProperties": false,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    "EventCheckInCredentialsResponse": {
+        "dataType": "refObject",
+        "properties": {
+            "token": {"dataType":"string","required":true},
+            "code": {"dataType":"string","required":true},
+            "closed": {"dataType":"boolean","required":true},
+        },
+        "additionalProperties": false,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    "SubmitEventCheckInResponse": {
+        "dataType": "refObject",
+        "properties": {
+            "checkedInAt": {"dataType":"string","required":true},
+        },
+        "additionalProperties": false,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    "SubmitEventCheckInRequest": {
+        "dataType": "refObject",
+        "properties": {
+            "code": {"dataType":"string"},
+            "token": {"dataType":"string"},
+        },
+        "additionalProperties": false,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    "SetEventCheckInClosedResponse": {
+        "dataType": "refObject",
+        "properties": {
+            "closed": {"dataType":"boolean","required":true},
+        },
+        "additionalProperties": false,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    "SetEventCheckInClosedRequest": {
+        "dataType": "refObject",
+        "properties": {
+            "closed": {"dataType":"boolean","required":true},
         },
         "additionalProperties": false,
     },
@@ -940,6 +993,7 @@ const models: TsoaRoute.Models = {
             "status": {"dataType":"string","required":true},
             "data": {"dataType":"array","array":{"dataType":"refAlias","ref":"DocumentJSON_IRsvp_"},"required":true},
             "pagination": {"dataType":"nestedObjectLiteral","nestedProperties":{"totalPages":{"dataType":"double","required":true}},"required":true},
+            "counts": {"dataType":"nestedObjectLiteral","nestedProperties":{"total":{"dataType":"double","required":true},"accepted":{"dataType":"double","required":true}},"required":true},
         },
         "additionalProperties": false,
     },
@@ -949,6 +1003,17 @@ const models: TsoaRoute.Models = {
         "properties": {
             "page": {"dataType":"double","required":true},
             "pageSize": {"dataType":"double"},
+        },
+        "additionalProperties": false,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    "GetAttendeesResponse": {
+        "dataType": "refObject",
+        "properties": {
+            "status": {"dataType":"string","required":true},
+            "data": {"dataType":"array","array":{"dataType":"nestedObjectLiteral","nestedProperties":{"rsvp":{"dataType":"union","subSchemas":[{"dataType":"enum","enums":["Accept"]},{"dataType":"enum","enums":["Walk-in"]},{"dataType":"enum","enums":["Manual"]}],"required":true},"method":{"dataType":"union","subSchemas":[{"dataType":"enum","enums":["qr"]},{"dataType":"enum","enums":["code"]},{"dataType":"enum","enums":["manual"]}],"required":true},"checkedInAt":{"dataType":"string","required":true},"email":{"dataType":"string","required":true}}},"required":true},
+            "pagination": {"dataType":"nestedObjectLiteral","nestedProperties":{"totalPages":{"dataType":"double","required":true}},"required":true},
+            "counts": {"dataType":"nestedObjectLiteral","nestedProperties":{"total":{"dataType":"double","required":true}},"required":true},
         },
         "additionalProperties": false,
     },
@@ -3123,6 +3188,104 @@ export function RegisterRoutes(app: Router) {
             }
         });
         // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+        const argsEventController_getCheckInCredentials: Record<string, TsoaRoute.ParameterSchema> = {
+                req: {"in":"request","name":"req","required":true,"dataType":"object"},
+                eventId: {"in":"path","name":"eventId","required":true,"dataType":"string"},
+        };
+        app.get('/api/events/:eventId/check-in/credentials',
+            authenticateMiddleware([{"oidc":[]}]),
+            ...(fetchMiddlewares<RequestHandler>(EventController)),
+            ...(fetchMiddlewares<RequestHandler>(EventController.prototype.getCheckInCredentials)),
+
+            async function EventController_getCheckInCredentials(request: ExRequest, response: ExResponse, next: any) {
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = templateService.getValidatedArgs({ args: argsEventController_getCheckInCredentials, request, response });
+
+                const controller = new EventController();
+
+              await templateService.apiHandler({
+                methodName: 'getCheckInCredentials',
+                controller,
+                response,
+                next,
+                validatedArgs,
+                successStatus: 200,
+              });
+            } catch (err) {
+                return next(err);
+            }
+        });
+        // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+        const argsEventController_submitEventCheckIn: Record<string, TsoaRoute.ParameterSchema> = {
+                req: {"in":"request","name":"req","required":true,"dataType":"object"},
+                eventId: {"in":"path","name":"eventId","required":true,"dataType":"string"},
+                body: {"in":"body","name":"body","required":true,"ref":"SubmitEventCheckInRequest"},
+        };
+        app.post('/api/events/:eventId/check-in',
+            authenticateMiddleware([{"oidc":[]}]),
+            ...(fetchMiddlewares<RequestHandler>(EventController)),
+            ...(fetchMiddlewares<RequestHandler>(EventController.prototype.submitEventCheckIn)),
+
+            async function EventController_submitEventCheckIn(request: ExRequest, response: ExResponse, next: any) {
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = templateService.getValidatedArgs({ args: argsEventController_submitEventCheckIn, request, response });
+
+                const controller = new EventController();
+
+              await templateService.apiHandler({
+                methodName: 'submitEventCheckIn',
+                controller,
+                response,
+                next,
+                validatedArgs,
+                successStatus: 200,
+              });
+            } catch (err) {
+                return next(err);
+            }
+        });
+        // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+        const argsEventController_setCheckInClosed: Record<string, TsoaRoute.ParameterSchema> = {
+                req: {"in":"request","name":"req","required":true,"dataType":"object"},
+                eventId: {"in":"path","name":"eventId","required":true,"dataType":"string"},
+                body: {"in":"body","name":"body","required":true,"ref":"SetEventCheckInClosedRequest"},
+        };
+        app.patch('/api/events/:eventId/check-in',
+            authenticateMiddleware([{"oidc":[]}]),
+            ...(fetchMiddlewares<RequestHandler>(EventController)),
+            ...(fetchMiddlewares<RequestHandler>(EventController.prototype.setCheckInClosed)),
+
+            async function EventController_setCheckInClosed(request: ExRequest, response: ExResponse, next: any) {
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = templateService.getValidatedArgs({ args: argsEventController_setCheckInClosed, request, response });
+
+                const controller = new EventController();
+
+              await templateService.apiHandler({
+                methodName: 'setCheckInClosed',
+                controller,
+                response,
+                next,
+                validatedArgs,
+                successStatus: 200,
+              });
+            } catch (err) {
+                return next(err);
+            }
+        });
+        // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
         const argsEventController_cancelEvent: Record<string, TsoaRoute.ParameterSchema> = {
                 req: {"in":"request","name":"req","required":true,"dataType":"object"},
                 eventId: {"in":"path","name":"eventId","required":true,"dataType":"string"},
@@ -3209,6 +3372,38 @@ export function RegisterRoutes(app: Router) {
 
               await templateService.apiHandler({
                 methodName: 'getRsvps',
+                controller,
+                response,
+                next,
+                validatedArgs,
+                successStatus: 200,
+              });
+            } catch (err) {
+                return next(err);
+            }
+        });
+        // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+        const argsEventController_getAttendees: Record<string, TsoaRoute.ParameterSchema> = {
+                eventId: {"in":"path","name":"eventId","required":true,"dataType":"string"},
+                queries: {"in":"queries","name":"queries","required":true,"ref":"GetRsvpsRequest"},
+        };
+        app.get('/api/events/:eventId/attendees',
+            authenticateMiddleware([{"events":[]}]),
+            ...(fetchMiddlewares<RequestHandler>(EventController)),
+            ...(fetchMiddlewares<RequestHandler>(EventController.prototype.getAttendees)),
+
+            async function EventController_getAttendees(request: ExRequest, response: ExResponse, next: any) {
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = templateService.getValidatedArgs({ args: argsEventController_getAttendees, request, response });
+
+                const controller = new EventController();
+
+              await templateService.apiHandler({
+                methodName: 'getAttendees',
                 controller,
                 response,
                 next,
