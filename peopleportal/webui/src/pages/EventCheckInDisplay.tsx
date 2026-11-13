@@ -1,3 +1,4 @@
+import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PEOPLEPORTAL_SERVER_ENDPOINT } from "@/commons/config";
@@ -105,6 +106,13 @@ export function EventCheckInDisplay() {
             setPending(false);
         }
     }
+    const checkInUrl =
+    credentials && eventId
+        ? new URL(
+              `/community/events/${encodeURIComponent(eventId)}/check-in?token=${encodeURIComponent(credentials.token)}`,
+              window.location.origin,
+          ).href
+        : null;
 
     return (
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
@@ -128,13 +136,62 @@ export function EventCheckInDisplay() {
                 <p role="status">Loading check-in details…</p>
             )}
 
-            {credentials && (
+                        {credentials && (
                 <Card>
                     <CardHeader>
-                        <CardTitle>Event code</CardTitle>
+                        <CardTitle>Scan to check in</CardTitle>
                     </CardHeader>
 
                     <CardContent className="space-y-6 text-center">
+                        <div className="mx-auto w-fit max-w-full rounded-xl bg-white p-4">
+                            <QRCodeSVG
+                                value={checkInUrl!}
+                                size={256}
+                                marginSize={4}
+                                title="Scan to check in to this event"
+                                className="h-auto max-w-full"
+                            />
+                        </div>
+
+                        {import.meta.env.DEV && checkInUrl && (
+                            <div className="space-y-3 rounded-lg border p-4 text-left">
+                                <p className="text-sm font-medium">
+                                    Local QR debugging
+                                </p>
+
+                                <p className="text-sm text-muted-foreground">
+                                    This opens the exact link encoded in
+                                    the QR code. Opening it records
+                                    attendance for the signed-in account.
+                                </p>
+
+                                <Button asChild variant="outline">
+                                    <a
+                                        href={checkInUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                    >
+                                        Open check-in link
+                                    </a>
+                                </Button>
+
+                                <input
+                                    aria-label="Check-in test URL"
+                                    readOnly
+                                    value={checkInUrl}
+                                    onFocus={(event) =>
+                                        event.currentTarget.select()
+                                    }
+                                    className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                                />
+                            </div>
+                        )}
+
+                        <p className="text-sm text-muted-foreground">
+                            Scan with your phone and sign in with your
+                            portal account.
+                        </p>
+
                         <p className="font-mono text-5xl font-bold tracking-widest">
                             {credentials.code}
                         </p>

@@ -19,6 +19,7 @@
 import { Route, Routes } from "react-router-dom";
 import { UserOnboarding } from "./pages/UserOnboarding";
 import { Toaster } from "sonner";
+import { EventCheckIn } from "./pages/EventCheckIn";
 import { CorpDashboard } from "./pages/CorpDashboard";
 import { ThemeProvider } from "./components/fabric/ThemeProvider";
 import { ATSDashboard } from "./pages/ATSDashboard";
@@ -29,10 +30,15 @@ function App() {
             <div className="flex flex-col h-full w-full">
                 <Toaster richColors position="top-right" />
                 <Routes>
+                    <Route path="/community/events/:eventId/check-in" element={<EventCheckIn />} />
                     <Route path="/*" element={<CorpDashboard />} />
                     <Route
                         path="/onboard/:onboardId/*"
                         element={<UserOnboarding />}
+                    />
+                    <Route
+                        path="/community/events/:eventId/check-in"
+                        element={<EventCheckIn />}
                     />
                     <Route path="/apply/*" element={<ATSDashboard />} />
                 </Routes>
